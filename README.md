@@ -36,7 +36,7 @@ changes who can reach your books.
 ## Install
 
 ```bash
-git clone https://github.com/OWNER/manager-full-mcp.git
+git clone https://github.com/nezaralzien/manager-full-mcp.git
 cd manager-full-mcp
 uv venv --python 3.12 ~/.manager-full-mcp/venv
 uv pip install --python ~/.manager-full-mcp/venv/bin/python .
