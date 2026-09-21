@@ -101,3 +101,20 @@ async def test_missing_business_explains_the_next_step(tmp_path, monkeypatch):
     engine.clear_sessions()
     with pytest.raises(ValueError, match="open_permissions_panel"):
         await S.manager_list("customers")
+
+
+async def test_permission_listings_stay_small(env):
+    """These lists can cover 300 resources; the tool must not dump them all."""
+    session = await engine.get_session()
+    from manager_full_mcp.permissions import ASK, load_policy, save_policy
+
+    policy = load_policy("test-books", session.catalog)
+    policy.resources = {}  # fall through to the defaults below
+    policy.defaults = {"read": "allow", "create": ASK, "update": ASK, "delete": ASK}
+    save_policy(policy)
+    import json
+
+    out = await S.manager_permissions()
+    assert out["ask_first_resources"] > 200
+    assert len(json.dumps(out)) < 3000  # the whole answer stays small
+    assert out["write_access_by_group"]["Sales"]["ask_first"] > 0

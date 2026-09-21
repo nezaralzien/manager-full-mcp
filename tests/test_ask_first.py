@@ -129,7 +129,8 @@ async def test_deny_never_asks(env, asked):
 async def test_tools_report_ask_first(env, asked):
     await _set("tax_codes", create=ASK)
     perms = await S.manager_permissions()
-    assert "tax_codes(create)" in perms["ask_first"]
+    assert perms["ask_first_resources"] == 1
+    assert perms["write_access_by_group"]["Tax"] == {"allowed": 0, "ask_first": 1}
     catalog = await S.manager_catalog(search="tax_codes", limit=5)
     row = next(r for r in catalog["returned"] if r["resource"] == "tax_codes")
     assert row["ask_first"] == ["create"]

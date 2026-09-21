@@ -168,43 +168,46 @@ async def manager_catalog(
 async def manager_permissions(business: str | None = None) -> dict[str, Any]:
     session = await engine.get_session(business)
     session.refresh_policy()
-    writable: dict[str, list[str]] = {}
+    by_group: dict[str, dict[str, int]] = {}
     high_risk: list[str] = []
-    ask_first: list[str] = []
+    ask_count = 0
     for res in session.catalog.resources.values():
         modes = session.policy.grants_for(res)
         allowed = [op for op in ("create", "update", "delete") if modes[op] == ALLOW]
         asked = [op for op in ("create", "update", "delete") if modes[op] == ASK]
         if not allowed and not asked:
             continue
-        parts = []
-        if allowed:
-            parts.append("/".join(allowed))
+        row = by_group.setdefault(GROUP_LABELS.get(res.group, res.group),
+                                  {"allowed": 0, "ask_first": 0})
+        row["allowed"] += len(allowed)
+        row["ask_first"] += len(asked)
         if asked:
-            parts.append("ask:" + "/".join(asked))
-        mark = "!HIGH-RISK " if res.risk == "high" else ""
-        writable.setdefault(res.group, []).append(f"{mark}{res.name}({', '.join(parts)})")
-        if asked:
-            ask_first.append(f"{res.name}({'/'.join(asked)})")
+            ask_count += 1
         if res.risk == "high" and allowed:
             high_risk.append(f"{res.name}({'/'.join(allowed)})")
+
+    # Hundreds of resources can be writable; send counts, not a wall of names.
+    # manager_catalog answers questions about a specific resource.
+    sample = sorted(high_risk)[:12]
+    if len(high_risk) > 12:
+        sample.append(f"… and {len(high_risk) - 12} more")
     return {
         "ok": True,
         **session.policy.summary(session.catalog),
         "business_name": session.business.name,
-        "high_risk_writes_allowed_silently": sorted(high_risk),
-        "ask_first": sorted(ask_first),
+        "write_access_by_group": by_group,
+        "high_risk_writes_allowed_silently": sample,
         "high_risk_warning": (
             "These rewrite the structure of the books (accounts, tax codes, "
             "exchange rates, opening balances, lock date, settings). Confirm each "
             "change with the user before making it."
         ) if high_risk else "No high-risk write permissions are allowed silently.",
+        "ask_first_resources": ask_count,
         "ask_first_note": (
-            "Operations listed in ask_first go ahead only after the user approves "
-            "a confirmation dialog on their screen. Tell them what you are about "
-            "to do before triggering one."
+            "Operations set to 'ask' go ahead only after the user approves a "
+            "confirmation dialog on their screen. Tell them what you are about to "
+            "do before triggering one."
         ),
-        "writable_by_group": {GROUP_LABELS.get(g, g): sorted(v) for g, v in writable.items()},
         "permissions_file": str(permissions_file(session.business.id)),
         "change_with": "open_permissions_panel",
     }
