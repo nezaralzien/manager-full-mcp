@@ -122,10 +122,19 @@ you exactly what changed.
 | `manager_delete` | Delete a record (returns a copy of what was deleted) |
 | `manager_api_get` | Raw GET on any path (needs *Raw read*) |
 | `manager_api_request` | Raw POST/PUT/DELETE (needs *Raw write*) |
+| `prepare_attachment` | Rasterise a PDF to one PNG per page — Manager's Image field silently rejects PDFs |
 | `refresh_catalog` | Re-read the instance's API description |
 
 Every tool takes an optional `business`; it can be omitted when only one
 business is configured.
+
+## Attachments
+
+Manager's Image field accepts images and silently drops PDFs, and a multi-page
+document has to become one image per page. `prepare_attachment` does that
+conversion in-process (pypdfium2 + a small PNG writer — no poppler, no
+ImageMagick, no Pillow), so the rule cannot fail because a converter is missing
+from the machine. Converted pages land in `~/.manager-full-mcp/converted/`.
 
 ## Where things live
 

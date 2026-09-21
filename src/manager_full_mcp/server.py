@@ -14,6 +14,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from manager_full_mcp import __version__, engine
+from manager_full_mcp.attachments import ConversionError, prepare
 from manager_full_mcp.catalog import GROUP_LABELS, OPS
 from manager_full_mcp.config import load_registry, permissions_file
 from manager_full_mcp.engine import PermissionDenied
@@ -386,6 +387,24 @@ async def manager_api_request(
         "path": path,
         "body": result,
     }
+
+
+@mcp.tool(
+    description=(
+        "Turn a file into something Manager will accept as evidence. Manager's "
+        "Image field silently rejects PDFs, so ALWAYS run this on any PDF before "
+        "attaching it: it rasterises every page to its own PNG and returns their "
+        "paths. Images pass through untouched. Run it before every attachment "
+        "upload — it is cheap, and skipping it is how a PDF ends up attached and "
+        "invisible."
+    ),
+    annotations=_READ,
+)
+async def prepare_attachment(file_path: str, dpi: int = 150) -> dict[str, Any]:
+    try:
+        return prepare(file_path, dpi=dpi).payload()
+    except ConversionError as exc:
+        return {"ok": False, "error": "conversion_failed", "message": str(exc)}
 
 
 @mcp.tool(
