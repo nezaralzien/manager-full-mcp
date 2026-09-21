@@ -30,14 +30,22 @@ def output_dir() -> Path:
     return path
 
 
-def _png_from_bgr(width: int, height: int, stride: int, buffer: bytes) -> bytes:
-    """Encode a tightly packed BGR bitmap as an RGB PNG."""
-    rows = bytearray()
+def _to_rgb(width: int, height: int, stride: int, buffer: bytes) -> bytearray:
+    """Tightly packed RGB pixels, no PNG filter bytes."""
+    out = bytearray()
     for y in range(height):
         start = y * stride
         row = bytearray(buffer[start : start + width * 3])
         row[0::3], row[2::3] = row[2::3], row[0::3]  # BGR -> RGB
-        rows += b"\x00" + row  # filter type 0
+        out += row
+    return out
+
+
+def _png_from_rgb(width: int, height: int, pixels: bytes) -> bytes:
+    """Encode tightly packed RGB pixels as a PNG."""
+    rows = bytearray()
+    for y in range(height):
+        rows += b"\x00" + pixels[y * width * 3 : (y + 1) * width * 3]
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         return (
@@ -53,6 +61,32 @@ def _png_from_bgr(width: int, height: int, stride: int, buffer: bytes) -> bytes:
         + chunk(b"IDAT", zlib.compress(bytes(rows), 6))
         + chunk(b"IEND", b"")
     )
+
+
+WHITE = 0xFF
+GAP_PIXELS = 24
+
+
+def _stack(pages: list[tuple[int, int, bytearray]], direction: str) -> tuple[int, int, bytearray]:
+    """Compose rendered pages of ONE document into a single canvas."""
+    if direction == "vertical":
+        width = max(p[0] for p in pages)
+        height = sum(p[1] for p in pages) + GAP_PIXELS * (len(pages) - 1)
+    else:
+        width = sum(p[0] for p in pages) + GAP_PIXELS * (len(pages) - 1)
+        height = max(p[1] for p in pages)
+    canvas = bytearray([WHITE]) * (width * height * 3)
+    offset = 0
+    for page_width, page_height, pixels in pages:
+        for y in range(page_height):
+            src = pixels[y * page_width * 3 : (y + 1) * page_width * 3]
+            if direction == "vertical":
+                start = ((offset + y) * width) * 3
+            else:
+                start = (y * width + offset) * 3
+            canvas[start : start + len(src)] = src
+        offset += (page_height if direction == "vertical" else page_width) + GAP_PIXELS
+    return width, height, canvas
 
 
 @dataclass
@@ -74,7 +108,21 @@ class Prepared:
         }
 
 
-def prepare(path: str | Path, *, dpi: int = DEFAULT_DPI, out_dir: Path | None = None) -> Prepared:
+def prepare(
+    path: str | Path,
+    *,
+    dpi: int = DEFAULT_DPI,
+    out_dir: Path | None = None,
+    combine: str = "none",
+) -> Prepared:
+    """Render `path` to attachable images.
+
+    `combine` only ever joins pages of the *same* document: "none" (one image per
+    page), "vertical" or "horizontal". Two different proofs are never merged —
+    each one is its own attachment.
+    """
+    if combine not in {"none", "vertical", "horizontal"}:
+        raise ConversionError("combine must be 'none', 'vertical' or 'horizontal'.")
     source = Path(path).expanduser()
     if not source.is_file():
         raise ConversionError(f"No such file: {source}")
@@ -112,26 +160,44 @@ def prepare(path: str | Path, *, dpi: int = DEFAULT_DPI, out_dir: Path | None = 
         raise ConversionError(f"Could not read {source.name} as a PDF: {exc}") from exc
 
     stem = source.stem.replace("/", "-")
-    written: list[Path] = []
+    pages: list[tuple[int, int, bytearray]] = []
     for index in range(count):
         bitmap = document[index].render(scale=dpi / 72)
         if bitmap.mode != "BGR":  # pragma: no cover - pdfium default is BGR
             raise ConversionError(f"Unexpected bitmap mode {bitmap.mode!r} from pdfium.")
-        data = _png_from_bgr(
-            bitmap.width, bitmap.height, bitmap.stride, bytes(bitmap.buffer)
+        pages.append(
+            (
+                bitmap.width,
+                bitmap.height,
+                _to_rgb(bitmap.width, bitmap.height, bitmap.stride, bytes(bitmap.buffer)),
+            )
         )
-        name = f"{stem}.png" if count == 1 else f"{stem}-p{index + 1}.png"
-        out = target / name
-        out.write_bytes(data)
-        written.append(out)
 
-    note = (
-        f"PDF rasterised at {dpi} dpi. Manager rejects PDFs, so attach these "
-        f"image{'s' if count > 1 else ''} instead of the original file."
-    )
-    if count > 1:
-        note += (
-            f" The document has {count} pages: attach one page per record, or all "
-            "of them to the record they evidence — never merge pages into one image."
+    written: list[Path] = []
+    if combine != "none" and count > 1:
+        width, height, canvas = _stack(pages, combine)
+        out = target / f"{stem}-all-{count}-pages.png"
+        out.write_bytes(_png_from_rgb(width, height, bytes(canvas)))
+        written.append(out)
+        note = (
+            f"PDF rasterised at {dpi} dpi and its {count} pages joined "
+            f"{combine}ly into ONE image ({width}x{height}px) — one document, one "
+            "attachment. Two different proofs are still attached separately."
         )
+    else:
+        for index, (width, height, pixels) in enumerate(pages):
+            name = f"{stem}.png" if count == 1 else f"{stem}-p{index + 1}.png"
+            out = target / name
+            out.write_bytes(_png_from_rgb(width, height, bytes(pixels)))
+            written.append(out)
+        note = (
+            f"PDF rasterised at {dpi} dpi. Manager rejects PDFs, so attach these "
+            f"image{'s' if count > 1 else ''} instead of the original file."
+        )
+        if count > 1:
+            note += (
+                f" The document has {count} pages, one image each. If they are one "
+                "document (a statement, a contract), pass combine='vertical' to get "
+                "a single attachment instead. Never merge two DIFFERENT proofs."
+            )
     return Prepared(source=source, files=written, converted=True, pages=count, note=note)

@@ -73,7 +73,8 @@ def test_pdf_becomes_one_png_per_page(tmp_path):
     ]
     for f in result.files:
         assert f.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
-    assert "never merge pages" in result.note
+    assert "combine='vertical'" in result.note
+    assert "Never merge two DIFFERENT proofs" in result.note
 
 
 def test_single_page_pdf_keeps_a_clean_name(tmp_path):
@@ -114,3 +115,43 @@ async def test_tool_returns_paths_ready_to_attach(tmp_path):
 async def test_tool_reports_failure_instead_of_raising(tmp_path):
     out = await S.prepare_attachment(str(tmp_path / "missing.pdf"))
     assert out["ok"] is False and out["error"] == "conversion_failed"
+
+
+def _png_size(path):
+    return struct.unpack(">II", path.read_bytes()[16:20] + path.read_bytes()[20:24])
+
+
+def test_pages_of_one_document_can_be_joined_vertically(tmp_path):
+    pdf = tmp_path / "statement.pdf"
+    pdf.write_bytes(_minimal_pdf(3))
+    single = prepare(pdf, out_dir=tmp_path / "a").files[0]
+    joined = prepare(pdf, combine="vertical", out_dir=tmp_path / "b")
+    assert len(joined.files) == 1
+    assert joined.files[0].name == "statement-all-3-pages.png"
+    w1, h1 = _png_size(single)
+    w2, h2 = _png_size(joined.files[0])
+    assert w2 == w1 and h2 > h1 * 3  # three pages plus the gaps
+    assert "one document, one attachment" in joined.note
+
+
+def test_pages_can_be_joined_horizontally(tmp_path):
+    pdf = tmp_path / "statement.pdf"
+    pdf.write_bytes(_minimal_pdf(2))
+    joined = prepare(pdf, combine="horizontal", out_dir=tmp_path / "h")
+    w, h = _png_size(joined.files[0])
+    single_w, single_h = _png_size(prepare(pdf, out_dir=tmp_path / "s").files[0])
+    assert h == single_h and w > single_w * 2
+
+
+def test_a_single_page_document_ignores_combine(tmp_path):
+    pdf = tmp_path / "one.pdf"
+    pdf.write_bytes(_minimal_pdf(1))
+    result = prepare(pdf, combine="vertical", out_dir=tmp_path / "o")
+    assert [f.name for f in result.files] == ["one.png"]
+
+
+def test_bad_combine_value_is_refused(tmp_path):
+    pdf = tmp_path / "x.pdf"
+    pdf.write_bytes(_minimal_pdf(1))
+    with pytest.raises(ConversionError, match="combine must be"):
+        prepare(pdf, combine="mosaic")

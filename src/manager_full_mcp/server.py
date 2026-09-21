@@ -393,16 +393,21 @@ async def manager_api_request(
     description=(
         "Turn a file into something Manager will accept as evidence. Manager's "
         "Image field silently rejects PDFs, so ALWAYS run this on any PDF before "
-        "attaching it: it rasterises every page to its own PNG and returns their "
-        "paths. Images pass through untouched. Run it before every attachment "
-        "upload — it is cheap, and skipping it is how a PDF ends up attached and "
-        "invisible."
+        "attaching it: it rasterises every page and returns the image paths. "
+        "Images pass through untouched. combine='vertical' (or 'horizontal') "
+        "joins the pages of ONE document — a statement, a contract — into a "
+        "single image, which is the right shape when the pages are one document. "
+        "Leave combine='none' when the PDF holds several different documents, and "
+        "never merge two different proofs into one image: each proof is its own "
+        "attachment."
     ),
     annotations=_READ,
 )
-async def prepare_attachment(file_path: str, dpi: int = 150) -> dict[str, Any]:
+async def prepare_attachment(
+    file_path: str, dpi: int = 150, combine: str = "none"
+) -> dict[str, Any]:
     try:
-        return prepare(file_path, dpi=dpi).payload()
+        return prepare(file_path, dpi=dpi, combine=combine).payload()
     except ConversionError as exc:
         return {"ok": False, "error": "conversion_failed", "message": str(exc)}
 
